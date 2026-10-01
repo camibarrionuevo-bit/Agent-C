@@ -100,6 +100,8 @@
   }
   .day-cell.outside{ opacity:.35; }
   .day-cell.today{ border-color:var(--accent); border-width:1.5px; }
+  .day-cell.selected{ background:var(--accent); border-color:var(--accent); }
+  .day-cell.selected .num{ color:#fff; }
   .day-cell .num{ font-size:13px; font-weight:600; }
   .day-cell .dots{ display:flex; gap:2px; margin-top:4px; flex-wrap:wrap; justify-content:center; }
   .dot{ width:5px; height:5px; border-radius:50%; background:var(--accent); }
@@ -184,6 +186,17 @@
   .add-patient-row button{
     width:100%; background:var(--accent-soft); color:var(--accent); border:none; border-radius:9px; padding:11px; font-weight:700;
   }
+  .backup-section{ margin-top:18px; padding-top:14px; border-top:1px solid var(--border); }
+  .backup-section-title{ font-size:12.5px; font-weight:700; color:var(--text-soft); padding:0 4px 8px; }
+  .backup-row{ display:flex; gap:8px; }
+  .backup-row button{
+    flex:1; border:1px solid var(--border); background:var(--surface); color:var(--accent); border-radius:9px; padding:10px; font-weight:600; font-size:13px;
+  }
+  .filter-toggle{
+    width:100%; margin-top:8px; border:1px solid var(--border); background:var(--surface); color:var(--text-soft);
+    border-radius:9px; padding:9px; font-weight:600; font-size:13px;
+  }
+  .filter-toggle.active{ background:var(--accent); color:#fff; border-color:var(--accent); }
 
   /* TAB BAR */
   .tabbar{
@@ -298,6 +311,7 @@
         <button class="seg-btn active" data-mode="patient">Per paziente</button>
         <button class="seg-btn" data-mode="location">Per luogo</button>
       </div>
+      <button type="button" class="filter-toggle" id="invoiceFilterBtn">☐ Mostra solo da fatturare</button>
     </div>
   </div>
 
@@ -438,6 +452,8 @@
 
       <div class="modal-actions" id="editActions" style="display:none;">
         <button type="button" class="warn-btn" id="toggleSkipBtn">Segna come non venuto</button>
+        <button type="button" id="togglePaymentBtn">Segna come pagato in contanti</button>
+        <button type="button" id="duplicateBtn">Duplica su altre date</button>
         <button type="button" id="deleteOccurrenceBtn">Elimina questa data</button>
         <button type="button" id="stopRecurrenceBtn" style="display:none;">Interrompi da questa data (mantiene lo storico)</button>
         <button type="button" class="danger-btn" id="deleteSeriesBtn" style="display:none;">Elimina intera serie (anche lo storico)</button>
@@ -480,6 +496,33 @@
   </div>
 </div>
 
+<!-- MODAL: DUPLICATE APPOINTMENT -->
+<div class="overlay" id="duplicateOverlay" style="z-index:25;">
+  <div class="sheet">
+    <div class="sheet-handle"><span></span></div>
+    <div class="sheet-header">
+      <h2 id="duplicateModalTitle">Duplica appuntamento</h2>
+      <button class="sheet-close" id="duplicateModalClose">&times;</button>
+    </div>
+    <div class="sheet-body">
+      <div class="hint-box" id="duplicateInfoBox"></div>
+      <div class="period-row" style="margin-bottom:8px;">
+        <div class="period-nav">
+          <button class="icon-btn" id="dupPrevBtn">&#8249;</button>
+          <div class="period-label" id="dupPeriodLabel">—</div>
+          <button class="icon-btn" id="dupNextBtn">&#8250;</button>
+        </div>
+      </div>
+      <div class="month-weekdays">
+        <span>L</span><span>M</span><span>M</span><span>G</span><span>V</span><span>S</span><span>D</span>
+      </div>
+      <div class="month-grid" id="dupMonthGrid"></div>
+      <div style="font-size:12px; color:var(--text-soft); padding:8px 4px 0;">Tocca i giorni su cui copiare l'appuntamento. Puoi selezionarne più di uno, anche su mesi diversi.</div>
+      <button class="save-btn" id="dupConfirmBtn" style="margin-top:14px;">Duplica</button>
+    </div>
+  </div>
+</div>
+
 <script>
 (function(){
   "use strict";
@@ -507,11 +550,12 @@
         if (!parsed.patients) parsed.patients = [];
         if (!parsed.series) parsed.series = [];
         if (!parsed.exceptions) parsed.exceptions = {};
+        if (!parsed.payments) parsed.payments = {};
         if (!parsed.locations || !parsed.locations.length) parsed.locations = defaultLocations();
         return parsed;
       }
     }catch(e){}
-    return { patients: [], series: [], exceptions: {}, locations: defaultLocations() };
+    return { patients: [], series: [], exceptions: {}, payments: {}, locations: defaultLocations() };
   }
   var state = loadState();
   function saveState(){ localStorage.setItem(STORAGE_KEY, JSON.stringify(state)); }
@@ -598,6 +642,7 @@
           seriesId: s.id, date: iso, dateObj: date, patientId: s.patientId,
           startTime: s.startTime, endTime: s.endTime, notes: s.notes,
           sessionType: s.sessionType || 'trattamento',
+          payment: state.payments[s.id + '_' + iso] || 'fattura',
           skipped: !!(exc && exc.status === 'skipped'), recurrence: s.recurrence
         });
       });
@@ -668,17 +713,19 @@
   // ---------- ELEMENTS ----------
   var el = {};
   ['headerTitle','agendaControls','summaryControls','periodLabel','summaryPeriodLabel',
-   'prevBtn','nextBtn','summaryPrevBtn','summaryNextBtn','todayBtn','viewSeg','summaryModeSeg',
+   'prevBtn','nextBtn','summaryPrevBtn','summaryNextBtn','todayBtn','viewSeg','summaryModeSeg','invoiceFilterBtn',
    'monthGrid','weekList','dayViewHead','dayViewList','summaryList',
    'patientSearchInput','patientsList','fabAdd',
    'apptOverlay','apptModalTitle','apptModalClose','patientInput','patientSuggestions',
    'suggestStrip','suggestStripText','suggestStripUse','apptDate','apptStart','apptEnd',
    'recurrenceSeg','recurrenceEndField','recurrenceEndSelect','recurrenceEndDate',
    'weekdayHint','sessionTypeSeg','apptNotes','editHintBox','apptSaveBtn','editActions',
-   'toggleSkipBtn','deleteOccurrenceBtn','stopRecurrenceBtn','deleteSeriesBtn',
+   'toggleSkipBtn','togglePaymentBtn','duplicateBtn','deleteOccurrenceBtn','stopRecurrenceBtn','deleteSeriesBtn',
    'patientOverlay','patientModalTitle','patientModalClose','patientNameInput','patientDobInput','locGrid',
    'newLocForm','newLocName','colorSwatches','newLocColorCustom','addLocConfirmBtn','savePatientBtn',
-   'birthdayBanner'
+   'birthdayBanner',
+   'duplicateOverlay','duplicateModalTitle','duplicateModalClose','duplicateInfoBox',
+   'dupPrevBtn','dupNextBtn','dupPeriodLabel','dupMonthGrid','dupConfirmBtn'
   ].forEach(function(id){ el[id] = document.getElementById(id); });
 
   // ---------- TAB SWITCHING ----------
@@ -860,6 +907,7 @@
     var metaParts = [];
     if (o.recurrence === 'weekly') metaParts.push('Ricorrente');
     if (loc) metaParts.push(loc.name);
+    if (o.payment === 'contanti') metaParts.push('Contanti');
     var meta = metaParts.join(' · ');
     var badge = '';
     if (o.skipped) badge = '<span class="badge">Non venuto</span>';
@@ -886,6 +934,7 @@
 
   // ---------- RENDER: SUMMARY ----------
   var summaryMode = 'patient';
+  var invoiceFilterOn = false;
   el.summaryModeSeg.querySelectorAll('.seg-btn').forEach(function(b){
     b.addEventListener('click', function(){
       el.summaryModeSeg.querySelectorAll('.seg-btn').forEach(function(x){ x.classList.remove('active'); });
@@ -894,6 +943,12 @@
       renderSummary();
     });
   });
+  el.invoiceFilterBtn.addEventListener('click', function(){
+    invoiceFilterOn = !invoiceFilterOn;
+    el.invoiceFilterBtn.classList.toggle('active', invoiceFilterOn);
+    el.invoiceFilterBtn.textContent = (invoiceFilterOn ? '☑' : '☐') + ' Mostra solo da fatturare';
+    renderSummary();
+  });
 
   function renderSummary(){
     var y = summaryFocus.getFullYear(), m = summaryFocus.getMonth();
@@ -901,6 +956,7 @@
     var rangeStart = new Date(y, m, 1);
     var rangeEnd = endOfMonth(rangeStart);
     var occ = allOccurrencesInRange(rangeStart, rangeEnd);
+    if (invoiceFilterOn) occ = occ.filter(function(o){ return o.payment !== 'contanti'; });
     if (summaryMode === 'location') renderSummaryByLocation(occ);
     else renderSummaryByPatient(occ);
   }
@@ -1011,6 +1067,14 @@
       });
     }
     html += '<div class="add-patient-row"><button id="addPatientBtn">+ Aggiungi paziente</button></div>';
+    html += '<div class="backup-section">'+
+              '<div class="backup-section-title">Backup dati</div>'+
+              '<div class="backup-row">'+
+                '<button type="button" id="exportBackupBtn">Esporta backup</button>'+
+                '<button type="button" id="importBackupBtn">Importa backup</button>'+
+              '</div>'+
+              '<input type="file" id="importBackupFile" accept="application/json" style="display:none;">'+
+            '</div>';
     el.patientsList.innerHTML = html;
 
     el.patientsList.querySelectorAll('[data-act="edit"]').forEach(function(b){
@@ -1031,6 +1095,57 @@
     document.getElementById('addPatientBtn').addEventListener('click', function(){
       openPatientModal({ mode:'create' });
     });
+
+    document.getElementById('exportBackupBtn').addEventListener('click', exportBackup);
+    document.getElementById('importBackupBtn').addEventListener('click', function(){
+      document.getElementById('importBackupFile').click();
+    });
+    document.getElementById('importBackupFile').addEventListener('change', function(e){
+      var file = e.target.files[0];
+      if (!file) return;
+      var reader = new FileReader();
+      reader.onload = function(){
+        importBackup(reader.result);
+        e.target.value = '';
+      };
+      reader.readAsText(file);
+    });
+  }
+
+  function exportBackup(){
+    var data = JSON.stringify(state, null, 2);
+    var blob = new Blob([data], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    var today = todayDate();
+    a.href = url;
+    a.download = 'agenda-backup-' + toISO(today) + '.json';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    setTimeout(function(){ URL.revokeObjectURL(url); }, 1000);
+  }
+
+  function importBackup(text){
+    var parsed;
+    try{ parsed = JSON.parse(text); }
+    catch(e){ alert('Il file scelto non è un backup valido.'); return; }
+    if (!parsed || !Array.isArray(parsed.patients) || !Array.isArray(parsed.series)){
+      alert('Il file scelto non è un backup valido.');
+      return;
+    }
+    if (!confirm('Importare questo backup sostituirà TUTTI i dati attuali (pazienti, appuntamenti, luoghi). Continuare?')) return;
+    state = {
+      patients: parsed.patients || [],
+      series: parsed.series || [],
+      exceptions: parsed.exceptions || {},
+      payments: parsed.payments || {},
+      locations: (parsed.locations && parsed.locations.length) ? parsed.locations : defaultLocations()
+    };
+    saveState();
+    renderPatients();
+    checkBirthdays();
+    alert('Backup importato correttamente.');
   }
   el.patientSearchInput.addEventListener('input', renderPatients);
 
@@ -1200,6 +1315,8 @@
     var exc = state.exceptions[key];
     var isSkipped = !!(exc && exc.status === 'skipped');
     el.toggleSkipBtn.textContent = isSkipped ? 'Segna come svolto' : 'Segna come non venuto';
+    var isCash = (state.payments[key] === 'contanti');
+    el.togglePaymentBtn.textContent = isCash ? 'Segna come da fatturare' : 'Segna come pagato in contanti';
 
     el.suggestStrip.classList.remove('open');
     el.patientSuggestions.classList.remove('open');
@@ -1370,6 +1487,14 @@
     saveState(); closeModal();
     if (activeTab === 'agenda') renderAgenda();
   });
+  el.togglePaymentBtn.addEventListener('click', function(){
+    if (!editingSeriesId || !editingDate) return;
+    var key = editingSeriesId + '_' + editingDate;
+    if (state.payments[key] === 'contanti') delete state.payments[key];
+    else state.payments[key] = 'contanti';
+    saveState(); closeModal();
+    if (activeTab === 'agenda') renderAgenda();
+  });
   el.deleteOccurrenceBtn.addEventListener('click', function(){
     if (!editingSeriesId || !editingDate) return;
     var s = state.series.find(function(x){ return x.id === editingSeriesId; });
@@ -1400,11 +1525,118 @@
     Object.keys(state.exceptions).forEach(function(k){
       if (k.indexOf(editingSeriesId+'_') === 0) delete state.exceptions[k];
     });
+    Object.keys(state.payments).forEach(function(k){
+      if (k.indexOf(editingSeriesId+'_') === 0) delete state.payments[k];
+    });
     saveState(); closeModal();
     if (activeTab === 'agenda') renderAgenda();
   });
 
-  // ---------- BIRTHDAYS ----------
+  // ---------- DUPLICATE APPOINTMENT ----------
+  var duplicateSourceSeries = null;
+  var dupFocus = todayDate();
+  var dupSelectedDates = {};
+
+  el.duplicateBtn.addEventListener('click', function(){
+    if (!editingSeriesId) return;
+    var s = state.series.find(function(x){ return x.id === editingSeriesId; });
+    if (!s) return;
+    duplicateSourceSeries = s;
+    dupSelectedDates = {};
+    dupFocus = editingDate ? parseISO(editingDate) : parseISO(s.startDate);
+    var typeLabel = (s.sessionType === 'valutazione') ? ' · valutazione' : '';
+    el.duplicateInfoBox.textContent = 'Stai duplicando: ' + patientName(s.patientId) + ', ' + s.startTime + '–' + s.endTime + typeLabel;
+    renderDupMonth();
+    el.duplicateOverlay.classList.add('open');
+  });
+  function closeDuplicateModal(){ el.duplicateOverlay.classList.remove('open'); }
+  el.duplicateModalClose.addEventListener('click', closeDuplicateModal);
+  el.duplicateOverlay.addEventListener('click', function(e){ if (e.target === el.duplicateOverlay) closeDuplicateModal(); });
+
+  el.dupPrevBtn.addEventListener('click', function(){
+    dupFocus = new Date(dupFocus.getFullYear(), dupFocus.getMonth()-1, 1);
+    renderDupMonth();
+  });
+  el.dupNextBtn.addEventListener('click', function(){
+    dupFocus = new Date(dupFocus.getFullYear(), dupFocus.getMonth()+1, 1);
+    renderDupMonth();
+  });
+
+  function renderDupMonth(){
+    var y = dupFocus.getFullYear(), m = dupFocus.getMonth();
+    el.dupPeriodLabel.textContent = MONTH_NAMES[m] + ' ' + y;
+    var first = new Date(y, m, 1);
+    var gridStart = startOfWeek(first);
+    var last = endOfMonth(first);
+    var gridEnd = addDays(startOfWeek(last), 6);
+    var occ = allOccurrencesInRange(gridStart, gridEnd);
+    var byDate = {};
+    occ.forEach(function(o){ (byDate[o.date] = byDate[o.date] || []).push(o); });
+    var today = todayDate();
+
+    var html = '';
+    var cursor = new Date(gridStart);
+    while (cursor <= gridEnd){
+      var iso = toISO(cursor);
+      var isOutside = cursor.getMonth() !== m;
+      var isToday = sameDate(cursor, today);
+      var isSelected = !!dupSelectedDates[iso];
+      var dayOcc = byDate[iso] || [];
+      var dotsHtml = '';
+      dayOcc.slice(0,4).forEach(function(o){
+        var loc = patientLocation(o.patientId);
+        var col = o.skipped ? 'var(--warn)' : (loc ? loc.color : 'var(--accent)');
+        dotsHtml += '<span class="dot" style="background:'+col+'"></span>';
+      });
+      html += '<div class="day-cell'+(isOutside?' outside':'')+(isToday?' today':'')+(isSelected?' selected':'')+'" data-date="'+iso+'">'+
+                '<div class="num">'+cursor.getDate()+'</div>'+
+                '<div class="dots">'+dotsHtml+'</div>'+
+              '</div>';
+      cursor = addDays(cursor, 1);
+    }
+    el.dupMonthGrid.innerHTML = html;
+    el.dupMonthGrid.querySelectorAll('.day-cell').forEach(function(cell){
+      cell.addEventListener('click', function(){
+        var iso = cell.getAttribute('data-date');
+        if (dupSelectedDates[iso]) delete dupSelectedDates[iso];
+        else dupSelectedDates[iso] = true;
+        cell.classList.toggle('selected');
+      });
+    });
+  }
+
+  el.dupConfirmBtn.addEventListener('click', function(){
+    var dates = Object.keys(dupSelectedDates);
+    if (!dates.length){ alert('Seleziona almeno un giorno.'); return; }
+    if (!duplicateSourceSeries) return;
+    var s = duplicateSourceSeries;
+    var created = 0;
+    var conflictDates = [];
+    dates.sort();
+    dates.forEach(function(iso){
+      var candidate = {
+        patientId: s.patientId, startDate: iso, startTime: s.startTime, endTime: s.endTime,
+        notes: s.notes, recurrence: 'none', recurrenceEnd: null, sessionType: s.sessionType || 'trattamento'
+      };
+      var conflict = findConflict(candidate, null);
+      if (conflict){
+        conflictDates.push(formatDateShort(parseISO(iso)));
+      } else {
+        candidate.id = uid('ser');
+        state.series.push(candidate);
+        created++;
+      }
+    });
+    if (created > 0) saveState();
+    closeDuplicateModal();
+    closeModal();
+    if (activeTab === 'agenda') renderAgenda();
+    var msg = 'Duplicato su ' + created + (created === 1 ? ' giorno.' : ' giorni.');
+    if (conflictDates.length) msg += ' Saltati per sovrapposizione oraria: ' + conflictDates.join(', ') + '.';
+    alert(msg);
+  });
+
+
   function todaysBirthdays(){
     var t = todayDate();
     return state.patients.filter(function(p){
